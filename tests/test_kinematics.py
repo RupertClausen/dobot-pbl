@@ -128,15 +128,23 @@ def test_similarity_refuses_a_mirror():
     assert np.linalg.det(R) == pytest.approx(1.0)
 
 
-def test_fk_matches_the_real_robot():
-    """Locked against a pose read off an actual Magician over serial.
+@pytest.mark.parametrize("joints, reported", [
+    # folded rest pose, arm parked
+    ([0.00, -10.15, 100.65], [8.75, 0.00, -11.58]),
+    # unfolded, well out into the workspace and off-axis in J1
+    ([67.45, 20.59, 62.59], [67.06, 161.47, -4.12]),
+])
+def test_fk_matches_the_real_robot(joints, reported):
+    """Locked against poses read off an actual Magician over serial.
 
-    Joints and TCP were captured together from the arm's own encoders. This is
-    what pins L0 = 0: the robot reports Z from the shoulder axis, and an earlier
+    Joints and TCP were captured together from the arm's own encoders. These
+    pin L0 = 0: the robot reports Z from its shoulder axis, and an earlier
     default of 138 put every height a full base-height out.
+
+    Two poses, deliberately far apart in configuration space. One point can be
+    fitted by any number of wrong parameter sets; agreeing at both a folded and
+    an extended pose, and off the J1 = 0 plane, is what makes it convincing.
     """
-    joints = np.array([0.0, -10.15, 100.65])
-    reported = np.array([8.75, 0.00, -11.58])
     assert np.allclose(forward(*joints, geom=GEOM), reported, atol=0.05)
 
 

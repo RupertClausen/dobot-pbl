@@ -14,9 +14,29 @@ plate across the bench.
 ## Quick start
 
 ```bash
+./install.sh           # picks Docker if it is there, a virtualenv if not
+```
+
+**Docker is optional.** Nothing in `src/` depends on it — it is just a tidy way
+to isolate the toolchain on a machine that happens to have it. Both paths run
+the same code and are verified the same way; only the command prefix differs:
+
+| | with Docker | native (venv) |
+|---|---|---|
+| setup | `./install.sh --docker` | `./install.sh --native` |
+| run something | `dobotpbl python -m src.X` | `python -m src.X` |
+| tests | `dobotpbl --test` | `python -m pytest tests -q` |
+
+Every command in this README is written with the `dobotpbl` prefix. **Without
+Docker, drop the prefix** — activate the venv once (`source .venv/bin/activate`)
+and run from the project root so `src` is importable.
+
+### With Docker
+
+```bash
 dobotpbl --devices     # is the arm and camera actually visible?
 dobotpbl               # shell inside the container
-dobotpbl --test        # 36 tests, no hardware needed
+dobotpbl --test        # 37 tests, no hardware needed
 ```
 
 `dobotpbl` builds the image on first use and keeps one container alive. The
@@ -44,9 +64,17 @@ git clone git@github.com:RupertClausen/dobot-pbl.git
 cd dobot-pbl && ./install.sh
 ```
 
-That installs the `dobotpbl` launcher there and builds the image. If the clone
-is not at `~/Software/Coding/dobot-lab`, `install.sh` prints the
-`DOBOTPBL_PROJECT` line to add to your `~/.bashrc`.
+With no Docker present that builds a `.venv` and runs the test suite to prove
+it worked — nothing else to configure. With Docker it installs the `dobotpbl`
+launcher and builds the image instead; force either with `--native` / `--docker`.
+
+Two things the container normally handles that you own yourself natively:
+
+- **serial access** — you must be in the `dialout` group, or `/dev/ttyUSB0` is
+  unreadable. `install.sh` checks and tells you the `usermod` line. It needs a
+  full logout, not just a new shell.
+- **camera access** — granted automatically on a normal desktop login, but not
+  over SSH.
 
 Calibration lives in `calib/` and **is** committed, so `git pull` carries the
 lab robot's geometry across. `plate_to_robot.json` is the one that is specific
@@ -264,8 +292,10 @@ serial port is present.
 ## Files
 
 ```
-dobotpbl                    the launcher (also installed to ~/.local/bin)
+install.sh                  set up on a new machine, with or without Docker
+dobotpbl                    the Docker launcher (installed to ~/.local/bin)
 Dockerfile                  Python 3.11 + OpenCV 5 (Qt GUI) + the science stack
+requirements.txt            the same dependencies either path installs
 src/
   kinematics.py             FK, IK, Jacobian, joint limits, path interpolation
   dobot_arm.py              safe pydobot wrapper + simulator
@@ -282,7 +312,7 @@ src/
   demo_click_to_move.py     click the plate, arm goes there
   demo_pick_place.py        pick and place in plate coordinates
   plot_workspace.py         matplotlib workspace envelope
-tests/                      36 tests, hardware-free
+tests/                      37 tests, hardware-free
 calib/                      calibration output (committed — see calib/README.md)
 data/                       snapshots and plots (gitignored)
 ```
