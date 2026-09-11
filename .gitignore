@@ -1,0 +1,21 @@
+# Captured images, plots and snapshots - regenerate them, don't sync them.
+data/*
+!data/.gitkeep
+
+# Calibration IS committed (see calib/README), except the raw sample dump.
+calib/fk_samples.csv
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+notebooks/*.ipynb_checkpoints
+
+.venv/
+venv/
+.env
+
+.vscode/
+.idea/
+*.swp
+.DS_Store

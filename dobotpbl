@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# dobotpbl - quick access to the Dobot Magician + OpenCV container.
+#
+#   dobotpbl                  start (if needed) and drop into a shell
+#   dobotpbl <command...>     run a command inside the container
+#   dobotpbl --lab            JupyterLab on http://localhost:8888
+#   dobotpbl --stream         live ArUco camera view on http://localhost:5000
+#   dobotpbl --test           run the test suite
+#   dobotpbl --devices        show which robot/camera devices are visible inside
+#   dobotpbl --status         show container state
+#   dobotpbl --stop           stop the container
+#   dobotpbl --restart        restart the container
+#   dobotpbl --rebuild        rebuild the image and recreate the container
+#   dobotpbl --create         create the container if it does not exist
+#
+# The project directory is bind-mounted at /work, so the container itself holds
+# no state: edit files on the host with your normal editor, run them inside.
+# Deleting and recreating the container never loses work.
+
+set -euo pipefail
+
+PROJECT="${DOBOTPBL_PROJECT:-$HOME/Software/Coding/dobot-lab}"
+CONTAINER="${DOBOTPBL_CONTAINER:-dobot-pbl}"
+IMAGE="${DOBOTPBL_IMAGE:-dobot-lab:latest}"
+
+die() { echo "dobotpbl: $*" >&2; exit 1; }
+
+exists()  { docker container inspect "$CONTAINER" >/dev/null 2>&1; }
+running() { [ "$(docker container inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "true" ]; }
+
+allow_x11() {
+    # let the container talk to the host X server (cv2.imshow windows)
+    [ -n "${DISPLAY:-}" ] || return 0
+    command -v xhost >/dev/null 2>&1 || return 0
+    xhost +local:docker >/dev/null 2>&1 || true
+}
+
+build_image() {
+    [ -f "$PROJECT/Dockerfile" ] || die "no Dockerfile in $PROJECT (set DOBOTPBL_PROJECT)"
+    echo "dobotpbl: building $IMAGE ..."
+    docker build -t "$IMAGE" \
+        --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" \
+        "$PROJECT"
+}
+
+create() {
+    exists && die "container '$CONTAINER' already exists (use --rebuild to replace)."
+    docker image inspect "$IMAGE" >/dev/null 2>&1 || build_image
+    echo "dobotpbl: creating '$CONTAINER' ..."
+    allow_x11
+    # /dev is mounted whole so USB hotplug works: unplug and replug the Dobot
+    # and /dev/ttyUSB0 reappears inside the running container. Access is still
+    # limited to the three device classes below, not full privileged mode.
+    docker run -dit \
+        --name "$CONTAINER" \
+        --hostname dobot-pbl \
+        --init \
+        -w /work \
+        -v "$PROJECT:/work" \
+        -v /tmp/.X11-unix:/tmp/.X11-unix \
+        -v /run/udev:/run/udev:ro \
+        -v /dev:/dev \
+        --device-cgroup-rule 'c 188:* rmw' \
+        --device-cgroup-rule 'c 166:* rmw' \
+        --device-cgroup-rule 'c 81:* rmw' \
+        --group-add 20 \
+        --group-add 44 \
+        -p 8888:8888 \
+        -p 5000:5000 \
+        -e DISPLAY="${DISPLAY:-:0}" \
+        -e QT_X11_NO_MITSHM=1 \
+        -e QT_SCALE_FACTOR="${QT_SCALE_FACTOR:-1}" \
+        -e QT_AUTO_SCREEN_SCALE_FACTOR=0 \
+        -e PYTHONPATH=/work \
+        "$IMAGE" bash >/dev/null
+    echo "dobotpbl: created."
+}
+
+ensure_up() {
+    command -v docker >/dev/null 2>&1 || die "docker is not installed."
+    exists || create
+    if ! running; then
+        echo "dobotpbl: starting '$CONTAINER' ..."
+        docker start "$CONTAINER" >/dev/null
+    fi
+    allow_x11
+}
+
+TTY_FLAGS=(-i)
+[ -t 0 ] && [ -t 1 ] && TTY_FLAGS+=(-t)
+inside()      { docker exec "${TTY_FLAGS[@]}" -w /work "$CONTAINER" "$@"; }
+# exec form, so the container command's exit status becomes ours (pytest, etc.)
+inside_exec() { exec docker exec "${TTY_FLAGS[@]}" -w /work "$CONTAINER" "$@"; }
+
+case "${1:-}" in
+    --status)
+        if exists; then
+            docker ps -a --filter "name=^/${CONTAINER}$" \
+                --format 'name:  {{.Names}}'$'\n''image: {{.Image}}'$'\n''state: {{.Status}}'
+            echo "mount: $PROJECT -> /work"
+        else
+            echo "dobotpbl: container '$CONTAINER' does not exist (it is created on first use)."
+        fi
+        exit 0 ;;
+    --stop)
+        exists || die "container '$CONTAINER' does not exist."
+        docker stop "$CONTAINER" >/dev/null && echo "dobotpbl: stopped '$CONTAINER'."
+        exit 0 ;;
+    --restart)
+        exists || die "container '$CONTAINER' does not exist."
+        docker restart "$CONTAINER" >/dev/null && echo "dobotpbl: restarted '$CONTAINER'."
+        exit 0 ;;
+    --create)
+        create; exit 0 ;;
+    --rebuild)
+        build_image
+        if exists; then
+            echo "dobotpbl: recreating '$CONTAINER' ..."
+            docker rm -f "$CONTAINER" >/dev/null
+        fi
+        create; exit 0 ;;
+    --devices)
+        # Check the host first: if it is not here, it cannot be in the container.
+        echo "== host =="
+        ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "  no serial port - is the Dobot powered on and plugged in?"
+        ls /dev/video* 2>/dev/null || echo "  no camera"
+        echo
+        echo "== container =="
+        ensure_up
+        inside bash -lc '
+            ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "  no serial port visible"
+            python -c "from src.camera import list_cameras; print(\"  cameras delivering frames:\", list_cameras())" 2>/dev/null
+        '
+        exit 0 ;;
+    --lab)
+        ensure_up
+        echo "dobotpbl: JupyterLab on http://localhost:8888  (Ctrl-C to stop)"
+        inside_exec jupyter lab --ip=0.0.0.0 --port=8888 --no-browser \
+            --ServerApp.token='' --ServerApp.root_dir=/work ;;
+    --stream)
+        shift
+        ensure_up
+        echo "dobotpbl: camera stream on http://localhost:5000  (Ctrl-C to stop)"
+        inside_exec python -m src.live_view --stream "$@" ;;
+    --test)
+        shift
+        ensure_up
+        inside_exec python -m pytest tests -q "$@" ;;
+    -h|--help)
+        awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"
+        exit 0 ;;
+esac
+
+ensure_up
+if [ $# -eq 0 ]; then
+    inside_exec bash
+else
+    inside_exec "$@"
+fi

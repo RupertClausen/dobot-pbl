@@ -1,0 +1,146 @@
+"""Fit the link lengths in `kinematics.Geometry` to your actual robot.
+
+The published dimensions are nominal.  Individual arms differ by a millimetre
+or two, and `Ltool` changes every time you swap the end effector.  This script
+collects matched (joint angles, TCP position) pairs straight from the robot's
+own encoders and least-squares fits L0/L1/L2/Ltool/Ztool so that our FK agrees
+with what Dobot Studio reports.
+
+    python -m src.fit_kinematics --auto          # robot moves itself, ~2 min
+    python -m src.fit_kinematics --manual        # you drag it (hold Unlock)
+
+Do this once per end effector and commit the resulting calib/geometry.json.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from dataclasses import asdict
+from pathlib import Path
+
+import numpy as np
+from scipy.optimize import least_squares
+
+from src.dobot_arm import connect
+from src.kinematics import CALIB_DIR, Geometry, forward_many
+
+SAMPLES = CALIB_DIR / "fk_samples.csv"
+
+
+def collect_auto(arm, n_per_axis: int = 3) -> np.ndarray:
+    """Drive a coarse grid of reachable targets, recording what comes back."""
+    rows = []
+    targets = [(x, y, z)
+               for x in np.linspace(180, 250, n_per_axis)
+               for y in np.linspace(-70, 70, n_per_axis)
+               for z in np.linspace(0, 80, n_per_axis)]
+    arm.speed(40, 40)
+    for i, t in enumerate(targets, 1):
+        try:
+            arm.move_to(*t)
+        except Exception as exc:                      # skip anything unreachable
+            print(f"  [{i}/{len(targets)}] skip {t}: {exc}")
+            continue
+        time.sleep(0.35)                              # let the arm settle first
+        xyz, j = arm.pose()
+        rows.append([*j[:3], *xyz[:3]])
+        print(f"  [{i}/{len(targets)}] J{np.round(j[:3], 2)} -> {np.round(xyz[:3], 2)}")
+    return np.array(rows)
+
+
+def collect_manual(arm) -> np.ndarray:
+    """Record a pose each time you press Enter. Ctrl-D / 'q' when done.
+
+    Hold the Unlock button on the arm to drag it by hand between samples.  Aim
+    for 10+ poses spread widely across the workspace - clustered samples make
+    the fit look great and generalise badly.
+    """
+    rows = []
+    print("Drag the arm to a pose, release Unlock, press Enter. 'q' to finish.")
+    while True:
+        try:
+            if input(f"  sample {len(rows) + 1}> ").strip().lower() == "q":
+                break
+        except EOFError:
+            break
+        xyz, j = arm.pose()
+        rows.append([*j[:3], *xyz[:3]])
+        print(f"    J{np.round(j[:3], 2)} -> {np.round(xyz[:3], 2)}")
+    return np.array(rows)
+
+
+def fit(samples: np.ndarray, seed: Geometry | None = None) -> tuple[Geometry, dict]:
+    """Least-squares fit of the five length parameters to the recorded samples."""
+    if len(samples) < 5:
+        raise ValueError(f"need at least 5 samples to fit 5 parameters, got {len(samples)}")
+    joints, xyz = samples[:, :3], samples[:, 3:6]
+    s = seed or Geometry()
+    p0 = np.array([s.L0, s.L1, s.L2, s.Ltool, s.Ztool])
+
+    def residual(p):
+        return (forward_many(joints, Geometry(*p)) - xyz).ravel()
+
+    before = np.linalg.norm(residual(p0).reshape(-1, 3), axis=1)
+    # Lengths are bounded well away from zero; Ztool is free to go negative.
+    res = least_squares(residual, p0, method="trf",
+                        bounds=([50, 50, 50, 0, -150], [250, 250, 250, 200, 150]))
+    g = Geometry(*res.x)
+    after = np.linalg.norm(residual(res.x).reshape(-1, 3), axis=1)
+
+    stats = {
+        "n_samples": int(len(samples)),
+        "rms_before_mm": float(np.sqrt(np.mean(before ** 2))),
+        "rms_after_mm": float(np.sqrt(np.mean(after ** 2))),
+        "max_after_mm": float(after.max()),
+    }
+    return g, stats
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--auto", action="store_true",
+                      help="robot drives itself through a grid (default)")
+    mode.add_argument("--manual", action="store_true",
+                      help="you drag the arm, press Enter per pose")
+    mode.add_argument("--refit", action="store_true",
+                      help="re-fit from calib/fk_samples.csv, no robot needed")
+    ap.add_argument("--grid", type=int, default=3, help="auto grid points per axis")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="print the fit but do not write geometry.json")
+    args = ap.parse_args()
+
+    if args.refit:
+        if not SAMPLES.exists():
+            raise SystemExit(f"no saved samples at {SAMPLES}; collect some first")
+        samples = np.loadtxt(SAMPLES, delimiter=",", skiprows=1)
+    else:
+        with connect() as arm:
+            if arm.simulate:
+                raise SystemExit(
+                    "This needs the real robot: in simulation the samples are "
+                    "generated by the very model you are trying to fit.")
+            samples = collect_manual(arm) if args.manual else collect_auto(arm, args.grid)
+        CALIB_DIR.mkdir(parents=True, exist_ok=True)
+        np.savetxt(SAMPLES, samples, delimiter=",", fmt="%.4f",
+                   header="j1,j2,j3,x,y,z", comments="")
+        print(f"\nsaved {len(samples)} samples -> {SAMPLES}")
+
+    g, stats = fit(samples)
+    print("\n--- fit ---")
+    print(json.dumps(stats, indent=2))
+    print(json.dumps(asdict(g), indent=2))
+    if stats["rms_after_mm"] > 2.0:
+        print("\nWARNING: residual is still large. Usually means the samples are "
+              "clustered in one corner, or the arm was still moving when read. "
+              "Collect more poses, spread wider, and allow a longer settle.")
+    if args.dry_run:
+        print("\n--dry-run: nothing written")
+    else:
+        print(f"\nwrote {g.save()}")
+
+
+if __name__ == "__main__":
+    main()
