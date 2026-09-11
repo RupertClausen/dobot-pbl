@@ -52,8 +52,9 @@ def sample_joint_space(geom: Geometry, n: int = 90) -> pd.DataFrame:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--z", type=float, default=0.0,
-                    help="height for the top-down slice, mm")
+    ap.add_argument("--z", type=float, default=None,
+                    help="height for the top-down slice, mm "
+                         "(default: mid-height of the reachable range)")
     ap.add_argument("--plate-mm", type=float, default=200.0,
                     help="plate size to outline, mm")
     ap.add_argument("--out", default=str(DATA / "workspace.png"))
@@ -65,11 +66,21 @@ def main() -> None:
     print(f"reachable r: {df.r.min():.0f} to {df.r.max():.0f} mm")
     print(f"reachable z: {df.z.min():.0f} to {df.z.max():.0f} mm")
 
+    z_slice = args.z if args.z is not None else float(np.median(df.z))
+    if not (df.z.min() <= z_slice <= df.z.max()):
+        print(f"\nNOTE: z = {z_slice:.0f} mm is outside the model's reachable "
+              f"range, so the top view will be empty.")
+        if geom.Ztool == 0.0:
+            print("      Ztool is still 0, which assumes the tool tip sits exactly\n"
+                  "      on the J3 axis. A suction cup or gripper hangs below it, so\n"
+                  "      the real Ztool is negative and the arm reaches lower than\n"
+                  "      this model thinks. Run `python -m src.fit_kinematics --auto`.")
+
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6))
 
     sc = ax1.scatter(df.r, df.z, c=df.j2, s=3, cmap="viridis")
-    ax1.axhline(args.z, color="crimson", ls="--", lw=1.2,
-                label=f"slice at z = {args.z:.0f} mm")
+    ax1.axhline(z_slice, color="crimson", ls="--", lw=1.2,
+                label=f"slice at z = {z_slice:.0f} mm")
     ax1.set_xlabel("horizontal reach r [mm]")
     ax1.set_ylabel("height z [mm]")
     ax1.set_title("Side view: reachable envelope")
@@ -81,7 +92,7 @@ def main() -> None:
     # Top-down: test a grid through the real IK so joint limits on J1 show too.
     span = np.arange(-320, 321, 4.0)
     gx, gy = np.meshgrid(span, span)
-    mask = np.array([reachable(x, y, args.z, geom)
+    mask = np.array([reachable(x, y, z_slice, geom)
                      for x, y in zip(gx.ravel(), gy.ravel())]).reshape(gx.shape)
     ax2.pcolormesh(gx, gy, mask, cmap="Greens", alpha=0.6, shading="auto")
     ax2.plot(0, 0, "ks", ms=9, label="robot base")
@@ -105,7 +116,8 @@ def main() -> None:
 
     ax2.set_xlabel("robot X [mm]")
     ax2.set_ylabel("robot Y [mm]")
-    ax2.set_title(f"Top view at z = {args.z:.0f} mm")
+    ax2.set_title(f"Top view at z = {z_slice:.0f} mm"
+                  + ("  (nothing reachable here)" if not mask.any() else ""))
     ax2.set_aspect("equal")
     ax2.grid(alpha=0.3)
     ax2.legend(loc="upper right")
