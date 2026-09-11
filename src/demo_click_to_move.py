@@ -43,7 +43,10 @@ def main() -> None:
     ap.add_argument("--object-height", type=float, default=0.0,
                     help="height of what you are clicking on, mm. Needs "
                          "--camera-height. Clicking the plate itself is 0.")
-    ap.add_argument("--camera", type=int, default=None)
+    ap.add_argument("--camera", default=None,
+                    help="camera index, or a name matched under "
+                         "/dev/v4l/by-id (e.g. C270). Defaults to "
+                         "$CAMERA_INDEX.")
     ap.add_argument("--simulate", action="store_true")
     args = ap.parse_args()
 

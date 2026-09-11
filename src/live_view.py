@@ -126,7 +126,10 @@ def main() -> None:
     ap.add_argument("--stream", action="store_true",
                     help="serve MJPEG over HTTP instead of opening a window")
     ap.add_argument("--port", type=int, default=5000)
-    ap.add_argument("--camera", type=int, default=None)
+    ap.add_argument("--camera", default=None,
+                    help="camera index, or a name matched under "
+                         "/dev/v4l/by-id (e.g. C270). Defaults to "
+                         "$CAMERA_INDEX.")
     args = ap.parse_args()
 
     tracker = PlateTracker(PlateBoard.load())

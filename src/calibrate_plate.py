@@ -35,7 +35,10 @@ WINDOW = "plate calibration - click the tool tip, 'f' to fit"
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--camera", type=int, default=None)
+    ap.add_argument("--camera", default=None,
+                    help="camera index, or a name matched under "
+                         "/dev/v4l/by-id (e.g. C270). Defaults to "
+                         "$CAMERA_INDEX.")
     ap.add_argument("--min-samples", type=int, default=4)
     args = ap.parse_args()
 

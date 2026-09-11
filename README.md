@@ -325,8 +325,15 @@ mounting plate. If Z is out by roughly 138 mm, something has put the base height
 back into `Geometry.L0`; it belongs at 0. See *Note on the Z datum* above.
 
 **Scripts are using the laptop webcam instead of the overhead camera.** V4L2
-indices move. Select by name: `CAMERA_INDEX=C270 dobotpbl ...`, and check with
-`dobotpbl python -m src.camera`.
+indices move, which is why cameras are selected by name. Every capture script
+prints the index it opened — check that first. Override per run with
+`CAMERA_INDEX=C270 dobotpbl ...` or `--camera C270`, and list what is attached
+with `dobotpbl python -m src.camera`.
+
+Environment variables are re-sent on every `dobotpbl` call, so changing one
+takes effect immediately — no rebuild. (Before this, `docker run -e` baked the
+values in at container creation, so a container made before a default changed
+kept serving the stale value with nothing to indicate it.)
 
 **`plate_to_robot.json` not found.** Run `calibrate_plate` (step 4).
 

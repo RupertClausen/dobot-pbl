@@ -58,7 +58,10 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--marker-mm", type=float, default=None,
                     help="measured side of one BLACK marker square, in mm")
-    ap.add_argument("--camera", type=int, default=None)
+    ap.add_argument("--camera", default=None,
+                    help="camera index, or a name matched under "
+                         "/dev/v4l/by-id (e.g. C270). Defaults to "
+                         "$CAMERA_INDEX.")
     ap.add_argument("--image", type=str, default=None,
                     help="analyse a saved image instead of the live camera")
     ap.add_argument("--save", action="store_true",
@@ -71,6 +74,11 @@ def main() -> None:
             raise SystemExit(f"could not read {args.image}")
     else:
         with Camera(args.camera) as cam:
+            # Say which camera this is. Silently capturing from the laptop's
+            # built-in webcam instead of the overhead one looks exactly like
+            # "no markers detected", and there is otherwise nothing to see.
+            print(f"capturing from camera index {cam.index} at "
+                  f"{cam.size[0]}x{cam.size[1]}")
             frame = cam.read()
         cv2.imwrite("data/plate_snapshot.png", frame)
         print("snapshot -> data/plate_snapshot.png")
@@ -83,7 +91,9 @@ def main() -> None:
             "  - is the plate actually in frame and in focus?\n"
             "  - glare on glossy plastic is the usual culprit: tilt the plate,\n"
             "    or move the light off the specular angle\n"
-            "  - check data/plate_snapshot.png to see what the camera saw")
+            "  - check data/plate_snapshot.png to see what the camera saw\n"
+            "  - and confirm the index above is the overhead camera, not the\n"
+            "    laptop's built-in one: `python -m src.camera` lists them")
 
     for name, count, ids in results:
         print(f"  {name:<24} {count} marker(s)  ids={ids}")

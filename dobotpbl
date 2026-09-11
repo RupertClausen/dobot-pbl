@@ -89,9 +89,21 @@ ensure_up() {
 
 TTY_FLAGS=(-i)
 [ -t 0 ] && [ -t 1 ] && TTY_FLAGS+=(-t)
-inside()      { docker exec "${TTY_FLAGS[@]}" -w /work "$CONTAINER" "$@"; }
+
+# Passed on every exec, not just at create. `docker run -e` bakes values in when
+# the container is made, so a container created before a default changed - or
+# before you exported a different one - keeps serving the old value forever with
+# no sign that it is doing so. Re-sending them per exec means `CAMERA_INDEX=2
+# dobotpbl ...` works immediately and no rebuild is ever needed to change one.
+ENV_FLAGS=(
+    -e DISPLAY="${DISPLAY:-:0}"
+    -e CAMERA_INDEX="${CAMERA_INDEX:-C270}"
+    -e DOBOT_PORT="${DOBOT_PORT:-}"
+    -e QT_SCALE_FACTOR="${QT_SCALE_FACTOR:-1}"
+)
+inside()      { docker exec "${TTY_FLAGS[@]}" "${ENV_FLAGS[@]}" -w /work "$CONTAINER" "$@"; }
 # exec form, so the container command's exit status becomes ours (pytest, etc.)
-inside_exec() { exec docker exec "${TTY_FLAGS[@]}" -w /work "$CONTAINER" "$@"; }
+inside_exec() { exec docker exec "${TTY_FLAGS[@]}" "${ENV_FLAGS[@]}" -w /work "$CONTAINER" "$@"; }
 
 case "${1:-}" in
     --status)
