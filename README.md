@@ -35,6 +35,24 @@ loses work.
 | `dobotpbl --status` / `--stop` / `--restart` | container lifecycle |
 | `dobotpbl --rebuild` | rebuild the image after changing `requirements.txt` |
 
+Repo: <https://github.com/RupertClausen/dobot-pbl>
+
+### On another machine (the lab computer)
+
+```bash
+git clone git@github.com:RupertClausen/dobot-pbl.git
+cd dobot-pbl && ./install.sh
+```
+
+That installs the `dobotpbl` launcher there and builds the image. If the clone
+is not at `~/Software/Coding/dobot-lab`, `install.sh` prints the
+`DOBOTPBL_PROJECT` line to add to your `~/.bashrc`.
+
+Calibration lives in `calib/` and **is** committed, so `git pull` carries the
+lab robot's geometry across. `plate_to_robot.json` is the one that is specific
+to a physical setup — if the two machines drive different robots, keep an eye on
+which one you last committed.
+
 ---
 
 ## The order to do things in

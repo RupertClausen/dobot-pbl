@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Set this workspace up on a new machine (e.g. the lab computer).
 #
-#   git clone git@github.com:<you>/dobot-pbl.git
+#   git clone git@github.com:RupertClausen/dobot-pbl.git
 #   cd dobot-pbl && ./install.sh
 #
 # Installs the `dobotpbl` launcher into ~/.local/bin and builds the image.
