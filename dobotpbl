@@ -71,6 +71,7 @@ create() {
         -e QT_X11_NO_MITSHM=1 \
         -e QT_SCALE_FACTOR="${QT_SCALE_FACTOR:-1}" \
         -e QT_AUTO_SCREEN_SCALE_FACTOR=0 \
+        -e CAMERA_INDEX="${CAMERA_INDEX:-C270}" \
         -e PYTHONPATH=/work \
         "$IMAGE" bash >/dev/null
     echo "dobotpbl: created."
@@ -120,17 +121,27 @@ case "${1:-}" in
         fi
         create; exit 0 ;;
     --devices)
-        # Check the host first: if it is not here, it cannot be in the container.
+        # A glob that matches nothing is passed through literally, so
+        # `ls /dev/ttyUSB* /dev/ttyACM*` fails whenever only ONE of the two
+        # exists - which printed the port and "no port found" at the same time.
+        # Collect the matches first and count them.
+        list_serial() {
+            local found=() p
+            for p in /dev/ttyUSB* /dev/ttyACM*; do [ -e "$p" ] && found+=("$p"); done
+            if [ ${#found[@]} -eq 0 ]; then
+                echo "  no serial port - is the Dobot powered on and plugged in?"
+                return 1
+            fi
+            printf '  %s\n' "${found[@]}"
+        }
         echo "== host =="
-        ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "  no serial port - is the Dobot powered on and plugged in?"
-        ls /dev/video* 2>/dev/null || echo "  no camera"
+        list_serial || true
+        ls /dev/video* >/dev/null 2>&1 && ls -1 /dev/video* | sed 's/^/  /' || echo "  no camera"
         echo
         echo "== container =="
         ensure_up
-        inside bash -lc '
-            ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "  no serial port visible"
-            python -c "from src.camera import list_cameras; print(\"  cameras delivering frames:\", list_cameras())" 2>/dev/null
-        '
+        inside bash -lc "$(declare -f list_serial); list_serial || true
+            python -c 'from src.camera import list_cameras; print(\"  cameras delivering frames:\", list_cameras())' 2>/dev/null"
         exit 0 ;;
     --lab)
         ensure_up

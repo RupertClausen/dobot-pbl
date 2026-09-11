@@ -17,10 +17,10 @@ Angle convention (the same one Dobot Studio shows):
                    /  L2          ----o  <- J3 axis
              L1   /                   | Ltool
                  /                    o  <- TCP
-                o  (shoulder, J2 axis)
+                o  (shoulder, J2 axis)  ... z = 0 IS HERE
                 |
-                | L0
-             ===+===  base, z = 0
+                | ~138 mm, not part of the model
+             ===+===  bench, at about z = -138
 
 So, with r the horizontal distance from the base axis to the tool:
 
@@ -47,11 +47,23 @@ CALIB_DIR = Path(__file__).resolve().parent.parent / "calib"
 
 @dataclass
 class Geometry:
-    """Link lengths in millimetres."""
-    L0: float = 138.0     # base plate -> shoulder (J2) axis
+    """Link lengths in millimetres.
+
+    `L0` is 0 and that is not a placeholder. The Magician reports Z measured
+    from its **shoulder (J2) axis**, not from the bench it stands on - so in the
+    robot's own coordinates the shoulder is the origin and the bench is about
+    -138 mm. The published "138 mm base height" describes where the shoulder sits
+    physically; it is not an offset in the reported numbers. Verified against a
+    real arm to 0.01 mm (see `test_fk_matches_the_real_robot`).
+
+    Put 138 here and every Z is a whole base-height too high: the model decides
+    it cannot reach the bench at all, which is nonsense but looks like a joint
+    limit problem.
+    """
+    L0: float = 0.0       # shoulder (J2) axis -> Z origin; the robot's own datum
     L1: float = 135.0     # rear arm:  shoulder -> elbow
     L2: float = 147.0     # forearm:   elbow -> J3 axis
-    Ltool: float = 61.0   # J3 axis -> TCP, horizontal
+    Ltool: float = 59.7   # J3 axis -> TCP, horizontal (bare mounting plate)
     Ztool: float = 0.0    # J3 axis -> TCP, vertical (negative = tool hangs below)
 
     def save(self, path: Path | str = CALIB_DIR / "geometry.json") -> Path:
@@ -81,6 +93,10 @@ class Limits:
     j3: tuple[float, float] = (-10.0, 95.0)
     j4: tuple[float, float] = (-145.0, 145.0)
     elbow: tuple[float, float] = (-90.0, 65.0)
+
+    # A parked arm can read outside these - the folded rest pose is set by hand
+    # with the servos off, so it is not a commandable pose. Do not widen these
+    # to accommodate a reading taken while the arm was folded up.
 
 
 DEFAULT_LIMITS = Limits()

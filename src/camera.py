@@ -9,9 +9,32 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
+
+
+def resolve_index(name: str) -> int:
+    """Camera index for a device matched by name, e.g. ``"C270"``.
+
+    V4L2 index numbers shuffle on replug and between boots - the overhead
+    camera can be 4 today and 2 tomorrow, which silently points every script at
+    the laptop's built-in webcam instead. `/dev/v4l/by-id/` symlinks are stable
+    per physical device, so match on those.
+    """
+    by_id = Path("/dev/v4l/by-id")
+    if not by_id.is_dir():
+        raise RuntimeError("/dev/v4l/by-id is not available; use a numeric index")
+    hits = sorted(l for l in by_id.iterdir()
+                  if name.lower() in l.name.lower() and l.name.endswith("index0"))
+    if not hits:
+        have = sorted(l.name for l in by_id.iterdir() if l.name.endswith("index0"))
+        raise RuntimeError(f"no camera matching {name!r}. Present: {have}")
+    if len(hits) > 1:
+        raise RuntimeError(f"{name!r} matches more than one camera: "
+                           f"{[h.name for h in hits]}")
+    return int(str(hits[0].resolve()).rsplit("video", 1)[1])
 
 
 def list_cameras(max_index: int = 8) -> list[int]:
@@ -36,10 +59,15 @@ def list_cameras(max_index: int = 8) -> list[int]:
 class Camera:
     """A V4L2 capture device with sane defaults for marker detection."""
 
-    def __init__(self, index: int | None = None, width: int = 1280,
+    def __init__(self, index: int | str | None = None, width: int = 1280,
                  height: int = 720, fps: int = 30, autofocus: bool = False):
+        """`index` may be a V4L2 number, or a name to match under
+        /dev/v4l/by-id (``Camera("C270")``). `CAMERA_INDEX` accepts either."""
         if index is None:
-            index = int(os.environ.get("CAMERA_INDEX", "0"))
+            index = os.environ.get("CAMERA_INDEX", "0")
+        if isinstance(index, str) and not index.lstrip("-").isdigit():
+            index = resolve_index(index)
+        index = int(index)
         self.index = index
         self.cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
         if not self.cap.isOpened():
@@ -87,5 +115,12 @@ class Camera:
 
 if __name__ == "__main__":
     print("cameras that deliver frames:", list_cameras())
+    by_id = Path("/dev/v4l/by-id")
+    if by_id.is_dir():
+        print("stable names (use these, indices move on replug):")
+        for link in sorted(by_id.iterdir()):
+            if link.name.endswith("index0"):
+                print(f"  {link.name}  ->  {link.resolve().name}")
     with Camera() as cam:
-        print(f"camera {cam.index} at {cam.size}, frame {cam.read().shape}")
+        print(f"\nopened camera {cam.index} at {cam.size}, "
+              f"frame {cam.read().shape}")

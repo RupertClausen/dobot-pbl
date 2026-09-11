@@ -126,3 +126,24 @@ def test_similarity_refuses_a_mirror():
     dst = np.array([[0, 0], [0, 10], [10, 0]], float)      # mirrored
     R, _, _ = fit_similarity(src, dst)
     assert np.linalg.det(R) == pytest.approx(1.0)
+
+
+def test_fk_matches_the_real_robot():
+    """Locked against a pose read off an actual Magician over serial.
+
+    Joints and TCP were captured together from the arm's own encoders. This is
+    what pins L0 = 0: the robot reports Z from the shoulder axis, and an earlier
+    default of 138 put every height a full base-height out.
+    """
+    joints = np.array([0.0, -10.15, 100.65])
+    reported = np.array([8.75, 0.00, -11.58])
+    assert np.allclose(forward(*joints, geom=GEOM), reported, atol=0.05)
+
+
+def test_the_bench_is_reachable():
+    """A plate on the bench sits near z = -138. The arm must be able to get there.
+
+    With L0 = 138 this failed, which is exactly how the bug showed up: the model
+    claimed the workspace stopped a few mm above z = 0.
+    """
+    assert inverse(200.0, 0.0, -120.0, geom=GEOM) is not None

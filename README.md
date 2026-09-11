@@ -16,7 +16,7 @@ plate across the bench.
 ```bash
 dobotpbl --devices     # is the arm and camera actually visible?
 dobotpbl               # shell inside the container
-dobotpbl --test        # 34 tests, no hardware needed
+dobotpbl --test        # 36 tests, no hardware needed
 ```
 
 `dobotpbl` builds the image on first use and keeps one container alive. The
@@ -68,6 +68,19 @@ dobotpbl --devices
 The Dobot should appear as `/dev/ttyUSB0`. If it does not, it is a host problem,
 not a container problem — check power and the cable first.
 
+**1a. Point the camera at the plate.** Obvious, but check the view before
+calibrating anything:
+
+```bash
+dobotpbl python -m src.camera        # lists cameras and their stable names
+dobotpbl --stream                    # then look at http://localhost:5000
+```
+
+The overhead C270 is selected by **name**, not index — V4L2 numbers shuffle on
+replug and between boots, and the laptop's own webcam is usually index 0, so a
+numeric index silently points every script at the wrong camera. Override with
+`CAMERA_INDEX=<name-or-number> dobotpbl ...` if you swap cameras.
+
 **2. Work out what is printed on the plate.** Put the plate in view, measure one
 black marker square with a ruler, then:
 
@@ -85,11 +98,18 @@ plate uses — guessing wrong just returns nothing with no error. It writes
 dobotpbl python -m src.fit_kinematics --auto
 ```
 
-> **Do not skip this.** The nominal dimensions in `kinematics.py` assume the tool
-> tip sits exactly on the J3 axis. A suction cup or gripper hangs *below* it, so
-> `Ztool` is really negative and the uncalibrated model gets Z wrong by centimetres
-> — it will not let you reach the plate at all. The fit takes about two minutes
-> and typically pulls the error down to a few tenths of a millimetre.
+The defaults are verified against a real Magician to 0.01 mm for a **bare**
+mounting plate, so you can skip this if you are only moving the arm around. Run
+it once you fit an end effector: a suction cup or gripper hangs *below* the J3
+axis, which makes `Ztool` negative, and nothing else tells the model that. The
+fit takes about two minutes.
+
+> **Note on the Z datum.** The Magician reports Z from its **shoulder axis**,
+> not from the bench — so `L0` is 0, and the bench sits at roughly z = −138 mm.
+> If you have seen the "138 mm base height" figure and are tempted to put it in
+> `Geometry`, don't: it describes where the shoulder physically sits, it is not
+> an offset in the reported numbers. Adding it puts every height a whole base
+> above reality and the model concludes it cannot reach the bench at all.
 
 **4. Tell the robot where the plate is.**
 
@@ -262,7 +282,7 @@ src/
   demo_click_to_move.py     click the plate, arm goes there
   demo_pick_place.py        pick and place in plate coordinates
   plot_workspace.py         matplotlib workspace envelope
-tests/                      34 tests, hardware-free
+tests/                      36 tests, hardware-free
 calib/                      calibration output (committed — see calib/README.md)
 data/                       snapshots and plots (gitignored)
 ```
@@ -299,7 +319,14 @@ plate or move the light off the specular angle. Check `data/plate_snapshot.png`
 to see what the camera actually saw. Confirm the dictionary with
 `identify_plate`; a wrong dictionary returns silence, not an error.
 
-**The arm reaches the wrong height.** You skipped step 3. Run `fit_kinematics`.
+**The arm reaches the wrong height.** If an end effector is fitted, run
+`fit_kinematics` — `Ztool` defaults to 0, which is only right for a bare
+mounting plate. If Z is out by roughly 138 mm, something has put the base height
+back into `Geometry.L0`; it belongs at 0. See *Note on the Z datum* above.
+
+**Scripts are using the laptop webcam instead of the overhead camera.** V4L2
+indices move. Select by name: `CAMERA_INDEX=C270 dobotpbl ...`, and check with
+`dobotpbl python -m src.camera`.
 
 **`plate_to_robot.json` not found.** Run `calibrate_plate` (step 4).
 
