@@ -18,6 +18,7 @@ ArucoDetector class and works on 4.7+.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -188,19 +189,28 @@ class PlateBoard:
             raise RuntimeError("solvePnP failed")
         return rvec, tvec, usable
 
-    def draw(self, frame: np.ndarray, found: dict[int, np.ndarray]) -> np.ndarray:
-        """Outline detections and label them. Returns the same array."""
+    def draw(self, frame: np.ndarray, found: dict[int, np.ndarray],
+             stale: bool = False) -> np.ndarray:
+        """Outline detections and label them. Returns the same array.
+
+        Pass ``stale=True`` when the detections came from a cache rather than
+        this frame, so a hidden marker block cannot be mistaken for a live one -
+        green means "seen right now", amber means "remembered".
+        """
         for mid, c in found.items():
             pts = c.astype(int)
             known = mid in self.ids
-            cv2.polylines(frame, [pts], True,
-                          (0, 220, 0) if known else (0, 140, 255), 2)
+            if stale:
+                colour = (0, 190, 255)
+            else:
+                colour = (0, 220, 0) if known else (0, 140, 255)
+            cv2.polylines(frame, [pts], True, colour, 1 if stale else 2)
             cv2.circle(frame, tuple(pts[0]), 4, (0, 0, 255), -1)   # corner 0
+            # One pass only: putText scales letter spacing with thickness, so
+            # the usual thick-black-then-thin-colour outline ghosts sideways.
             ctr = pts.mean(axis=0).astype(int)
             cv2.putText(frame, str(mid), tuple(ctr - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, (255, 255, 255), 3, cv2.LINE_AA)
-            cv2.putText(frame, str(mid), tuple(ctr - 8), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, (0, 0, 0), 1, cv2.LINE_AA)
+                        0.6, colour, 2, cv2.LINE_AA)
         return frame
 
     # -- persistence -------------------------------------------------------- #
@@ -218,3 +228,67 @@ class PlateBoard:
         if not path.exists():
             return cls()
         return cls(**json.loads(path.read_text()))
+
+
+class PlateTracker:
+    """Keeps the last good homography so the arm can block the markers.
+
+    With a fixed overhead camera this is nearly free accuracy.  The camera does
+    not move, so a homography computed two seconds ago is still correct - but
+    the Dobot reaching over the plate *will* cover the marker block or throw a
+    shadow across it, and a bare `PlateBoard.homography` call raises the moment
+    that happens.  Caching turns a hard failure into a brief stale reading.
+
+    The cache is invalidated by age, not by movement, so if somebody does slide
+    the plate while the arm is parked on top of the markers you get a stale
+    frame for up to `max_age_s` before it starts refusing.  That is the right
+    trade for a workbench: the plate moves rarely, the arm occludes constantly.
+    """
+
+    def __init__(self, board: "PlateBoard", max_age_s: float = 5.0):
+        self.board = board
+        self.max_age_s = max_age_s
+        self._H: np.ndarray | None = None
+        self._found: dict[int, np.ndarray] = {}
+        self._stamp: float = 0.0
+        self._fresh = False
+
+    def update(self, frame: np.ndarray) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+        """``(H, detections)``, from this frame if possible, else the cache.
+
+        Raises `RuntimeError` only when there is no usable homography at all -
+        nothing detected now and nothing recent enough to fall back on.
+        """
+        try:
+            self._H, self._found = self.board.homography(frame)
+            self._stamp = time.time()
+            self._fresh = True
+        except RuntimeError:
+            self._fresh = False
+            if self._H is None:
+                raise
+            if self.age > self.max_age_s:
+                raise RuntimeError(
+                    f"plate not visible for {self.age:.1f} s and the cached "
+                    "homography has expired - move the arm out of the camera's "
+                    "view of the markers") from None
+        return self._H, self._found
+
+    @property
+    def age(self) -> float:
+        """Seconds since the homography was last computed from a live frame."""
+        return float("inf") if self._stamp == 0.0 else time.time() - self._stamp
+
+    @property
+    def fresh(self) -> bool:
+        """True if the most recent `update` saw the markers itself."""
+        return self._fresh
+
+    @property
+    def status(self) -> str:
+        """One-line state, for drawing on a live view."""
+        if self._H is None:
+            return "no plate lock"
+        if self._fresh:
+            return f"{len(self._found)}/9 markers"
+        return f"markers hidden - cached {self.age:.1f}s ago"

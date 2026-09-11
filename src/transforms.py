@@ -130,3 +130,65 @@ def pixel_to_robot(H: np.ndarray, tf: PlateToRobot, pixels,
     z = np.full((len(xy), 1), tf.plate_z + z_above)
     out = np.hstack([xy, z])
     return out[0] if np.ndim(pixels) == 1 else out
+
+
+# --------------------------------------------------------------------------- #
+# overhead-camera parallax
+# --------------------------------------------------------------------------- #
+def nadir_from_homography(H: np.ndarray, image_size: tuple[int, int]
+                          ) -> np.ndarray:
+    """Plate coordinates of the point directly below the camera.
+
+    Approximated as wherever the image centre lands on the plate, which is
+    correct for a camera pointing straight down and good to a few millimetres
+    for a tripod that is roughly level.  If you have run `calibrate_camera`,
+    `PlateBoard.pose` gives the true nadir instead.
+    """
+    import cv2
+    w, h = image_size
+    centre = np.array([[[w / 2.0, h / 2.0]]], float)
+    return cv2.perspectiveTransform(centre, H).reshape(2)
+
+
+def parallax_correct(plate_xy, nadir_xy, camera_height_mm: float,
+                     object_height_mm: float) -> np.ndarray:
+    """Correct for an object's height under an overhead camera.
+
+    The homography maps the *plate plane*.  An object standing on the plate is
+    seen by its top face, which sits closer to the camera, so it projects
+    outward from the camera's nadir - the block looks like it is further from
+    the centre of the image than it really is.  Reaching for the uncorrected
+    position misses outward, every time, in a way that looks like a scale error.
+
+        camera ●
+               |\\
+               | \\            the ray to the top face carries on and meets
+             H |  \\           the plate at q, further out than the true base p
+               |   \\
+        -------+----●---●-----  plate
+             nadir  p   q
+                    |<->| error = (p - nadir) * h / (H - h)
+
+    So ``q = nadir + (p - nadir) * H / (H - h)``, and this function inverts it:
+
+        p = nadir + (q - nadir) * (H - h) / H
+
+    Parameters
+    ----------
+    plate_xy          observed position(s) in plate mm - one point or ``(N, 2)``
+    nadir_xy          plate coords below the camera, from `nadir_from_homography`
+    camera_height_mm  lens height above the plate SURFACE (tape measure is fine)
+    object_height_mm  how tall the object is; 0 returns the input unchanged
+
+    The correction scales with distance from the nadir, so it is zero directly
+    under the camera and worst at the edges: a 20 mm block 150 mm off-nadir under
+    a 500 mm camera is displaced about 6 mm.
+    """
+    if camera_height_mm <= object_height_mm:
+        raise ValueError(
+            f"camera height ({camera_height_mm} mm) must exceed object height "
+            f"({object_height_mm} mm)")
+    q = np.atleast_2d(np.asarray(plate_xy, float))
+    n = np.asarray(nadir_xy, float).reshape(1, 2)
+    p = n + (q - n) * (camera_height_mm - object_height_mm) / camera_height_mm
+    return p[0] if np.ndim(plate_xy) == 1 else p

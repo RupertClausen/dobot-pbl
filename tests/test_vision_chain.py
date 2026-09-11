@@ -81,3 +81,81 @@ def test_homography_fails_loudly_when_the_plate_is_hidden(board):
 def test_wrong_dictionary_finds_nothing(image):
     """Guessing the dictionary wrong gives silence - which is why we scan."""
     assert detect(image, make_detector("DICT_6X6_250")) == {}
+
+
+# --------------------------------------------------------------------------- #
+# overhead camera specifics
+# --------------------------------------------------------------------------- #
+def test_tracker_survives_the_arm_covering_the_markers(image, board):
+    """A blocked frame must return the cached homography, not raise."""
+    from src.aruco import PlateTracker
+
+    tracker = PlateTracker(board, max_age_s=5.0)
+    H_good, _ = tracker.update(image)
+    assert tracker.fresh
+
+    blocked = np.zeros_like(image)                  # arm covers everything
+    H_cached, _ = tracker.update(blocked)
+    assert not tracker.fresh
+    assert np.allclose(H_cached, H_good)
+    assert "cached" in tracker.status
+
+
+def test_tracker_gives_up_once_the_cache_is_stale(image, board):
+    from src.aruco import PlateTracker
+
+    tracker = PlateTracker(board, max_age_s=0.0)    # expire immediately
+    tracker.update(image)
+    with pytest.raises(RuntimeError, match="expired"):
+        tracker.update(np.zeros_like(image))
+
+
+def test_tracker_raises_when_it_never_had_a_lock(board):
+    from src.aruco import PlateTracker
+
+    with pytest.raises(RuntimeError, match="visible"):
+        PlateTracker(board).update(np.zeros((400, 400, 3), np.uint8))
+
+
+def test_parallax_correction_inverts_the_projection():
+    """Project a known base position outward, then correct it back."""
+    from src.transforms import parallax_correct
+
+    nadir = np.array([100.0, 80.0])
+    H_cam, h_obj = 500.0, 20.0
+    true_base = np.array([[250.0, 80.0], [100.0, 80.0], [40.0, 10.0]])
+
+    # Forward model: where the top face appears on the plate plane.
+    observed = nadir + (true_base - nadir) * H_cam / (H_cam - h_obj)
+    assert np.allclose(parallax_correct(observed, nadir, H_cam, h_obj), true_base)
+
+
+def test_parallax_is_zero_directly_under_the_camera():
+    from src.transforms import parallax_correct
+
+    nadir = np.array([100.0, 80.0])
+    assert np.allclose(parallax_correct(nadir, nadir, 500.0, 30.0), nadir)
+
+
+def test_parallax_of_a_flat_object_changes_nothing():
+    from src.transforms import parallax_correct
+
+    pts = np.array([[10.0, 20.0], [200.0, 150.0]])
+    assert np.allclose(parallax_correct(pts, [100.0, 80.0], 500.0, 0.0), pts)
+
+
+def test_parallax_error_has_the_documented_magnitude():
+    """The README quotes ~6 mm for a 20 mm block 150 mm off-nadir at 500 mm."""
+    from src.transforms import parallax_correct
+
+    nadir = np.array([0.0, 0.0])
+    observed = np.array([150.0, 0.0])
+    corrected = parallax_correct(observed, nadir, 500.0, 20.0)
+    assert np.linalg.norm(observed - corrected) == pytest.approx(6.0, abs=0.1)
+
+
+def test_parallax_rejects_an_object_taller_than_the_camera():
+    from src.transforms import parallax_correct
+
+    with pytest.raises(ValueError, match="must exceed"):
+        parallax_correct([10.0, 10.0], [0.0, 0.0], 50.0, 60.0)

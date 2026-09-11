@@ -26,6 +26,7 @@ import numpy as np
 from src.aruco import PlateBoard
 from src.camera import Camera
 from src.dobot_arm import connect
+from src.overlay import footer, hud
 from src.transforms import PlateToRobot
 
 WINDOW = "plate calibration - click the tool tip, 'f' to fit"
@@ -87,12 +88,8 @@ def main() -> None:
                             (int(s["pixel"][0]) + 10, int(s["pixel"][1]) - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
 
-            cv2.putText(vis, status, (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7, colour, 2)
-            cv2.putText(vis, f"samples: {len(samples)}   click=record  "
-                             "u=undo  f=fit  q=quit",
-                        (10, vis.shape[0] - 14), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6, (255, 255, 255), 2)
+            hud(vis, [status, f"samples: {len(samples)}"], colours=[colour])
+            footer(vis, "click = record   u = undo   f = fit   q = quit")
             cv2.imshow(WINDOW, vis)
 
             key = cv2.waitKey(30) & 0xFF

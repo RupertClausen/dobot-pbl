@@ -19,11 +19,12 @@ import argparse
 import cv2
 import numpy as np
 
-from src.aruco import PlateBoard
+from src.aruco import PlateBoard, PlateTracker
 from src.camera import Camera
 from src.dobot_arm import connect
+from src.overlay import footer, hud
 from src.kinematics import UnreachableError
-from src.transforms import PlateToRobot
+from src.transforms import PlateToRobot, nadir_from_homography, parallax_correct
 
 WINDOW = "click to move - q to quit"
 
@@ -36,12 +37,26 @@ def main() -> None:
     ap.add_argument("--touch", action="store_true",
                     help="go all the way down to the plate instead of hovering")
     ap.add_argument("--speed", type=float, default=40.0, help="percent")
+    ap.add_argument("--camera-height", type=float, default=None,
+                    help="lens height above the plate surface in mm; enables "
+                         "parallax correction (measure it with a tape)")
+    ap.add_argument("--object-height", type=float, default=0.0,
+                    help="height of what you are clicking on, mm. Needs "
+                         "--camera-height. Clicking the plate itself is 0.")
     ap.add_argument("--camera", type=int, default=None)
     ap.add_argument("--simulate", action="store_true")
     args = ap.parse_args()
 
     board = PlateBoard.load()
+    tracker = PlateTracker(board)
     tf = PlateToRobot.load()
+
+    correcting = args.camera_height and args.object_height
+    if correcting:
+        print(f"parallax correction on: {args.object_height:.0f} mm object "
+              f"under a {args.camera_height:.0f} mm camera")
+    elif args.object_height:
+        print("--object-height ignored without --camera-height")
     print(f"plate transform: {tf.rotation_deg:+.2f} deg, scale {tf.scale:.4f}, "
           f"z {tf.plate_z:.1f} mm, rms {tf.rms_mm:.2f} mm")
 
@@ -62,9 +77,10 @@ def main() -> None:
             frame = cam.read(flush=1)
             vis = frame.copy()
             try:
-                H, found = board.homography(frame)
-                board.draw(vis, found)
-                msg, colour = f"{len(found)} markers - click anywhere", (0, 200, 0)
+                H, found = tracker.update(frame)
+                board.draw(vis, found, stale=not tracker.fresh)
+                msg = f"{tracker.status} - click anywhere"
+                colour = (0, 200, 0) if tracker.fresh else (0, 190, 255)
             except RuntimeError as exc:
                 H = None
                 msg, colour = str(exc)[:60], (0, 0, 255)
@@ -75,6 +91,10 @@ def main() -> None:
                     print("  no plate visible, ignoring click")
                     continue
                 plate = board.apply(H, np.array(px, float))[0]
+                if correcting:
+                    plate = parallax_correct(
+                        plate, nadir_from_homography(H, (vis.shape[1], vis.shape[0])),
+                        args.camera_height, args.object_height)
                 target = tf.to_xyz(plate, z_above=z_above)
                 try:
                     arm.move_to(*target)
@@ -95,13 +115,13 @@ def main() -> None:
                 cv2.putText(vis, f"({t[0]:.0f}, {t[1]:.0f}, {t[2]:.0f}) mm",
                             (int(last["px"][0]) + 14, int(last["px"][1]) - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, c, 2)
-                if not last["ok"]:
-                    cv2.putText(vis, last["why"][:58], (10, 60),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
             mode = "TOUCH" if args.touch else f"hover {args.hover:.0f} mm"
-            cv2.putText(vis, f"{msg}   [{mode}]", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2)
+            lines = [msg, f"mode: {mode}"]
+            if last and not last["ok"]:
+                lines.append(last["why"][:58])
+            hud(vis, lines, colours=[colour, (255, 255, 255), (0, 0, 255)])
+            footer(vis, "click = move there   h = home   q = quit")
             cv2.imshow(WINDOW, vis)
 
             key = cv2.waitKey(30) & 0xFF

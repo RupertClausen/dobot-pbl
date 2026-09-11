@@ -16,7 +16,7 @@ plate across the bench.
 ```bash
 dobotpbl --devices     # is the arm and camera actually visible?
 dobotpbl               # shell inside the container
-dobotpbl --test        # 26 tests, no hardware needed
+dobotpbl --test        # 34 tests, no hardware needed
 ```
 
 `dobotpbl` builds the image on first use and keeps one container alive. The
@@ -135,6 +135,54 @@ survive a knocked plate:
   the top row, +Y down the first column, millimetres.
 - **Robot frame** — the Magician's own base frame, the numbers Dobot Studio shows.
 
+### The camera is fixed, not on the arm
+
+This project assumes the camera is on a **stationary tripod looking down** at
+the plate, not mounted on the wrist. That is what makes the chain above work:
+`H` depends only on where the camera and plate are, so it stays valid while the
+arm moves. A wrist camera would invalidate `H` on every move and would need a
+different approach entirely.
+
+Two things follow from looking straight down at a workbench.
+
+**The arm will block the markers.** It reaches over the plate and covers the
+corner block, or throws a shadow across it. `PlateTracker` handles this by
+keeping the last good homography — the camera has not moved, so a lock from two
+seconds ago is still correct. The live view and the click-to-move demo both use
+it: markers outlined in **green** are being seen right now, **amber** means the
+view is blocked and the overlay is drawn from memory. After `max_age_s`
+(default 5 s) it gives up and says so rather than quietly using a stale frame.
+
+**Objects with height appear displaced outward.** The homography maps the plate
+*plane*. A block standing on the plate is seen by its top face, which is closer
+to the camera, so it projects further from the point directly below the lens
+than it really is — and the arm reaches past it, consistently, in a way that
+looks like a scale error.
+
+```
+  camera ●
+         |\
+         | \          the ray to the top face carries on and meets the
+       H |  \         plate further out than the block's actual base
+         |   \
+  -------+----●---●-----  plate
+       nadir  p   q       error = (p - nadir) * h / (H - h)
+```
+
+Measure the lens height above the plate with a tape and the correction is exact:
+
+```bash
+dobotpbl python -m src.demo_click_to_move --camera-height 500 --object-height 20
+```
+
+It scales with distance from the point under the camera, so it is zero directly
+below the lens and worst at the edges of the plate: a 20 mm block 150 mm
+off-centre under a 500 mm camera sits about **6 mm** from where it looks. Well
+worth correcting; ignore it and picking will fail at the edges while working
+fine in the middle, which is a confusing thing to debug.
+
+Clicking the bare plate needs no correction — that *is* the plate plane.
+
 `T` is fitted as a *similarity* (rotation + translation + one scale), not a full
 affine. Both sides are already in millimetres, so the true transform is rigid and
 the fitted scale coming out at 1.000 is a free correctness check. A full affine
@@ -203,17 +251,18 @@ src/
   dobot_arm.py              safe pydobot wrapper + simulator
   fit_kinematics.py         fit link lengths to YOUR arm            [calibration]
   camera.py                 V4L2 capture with stale-buffer flushing
-  aruco.py                  marker detection, plate frame, homography
+  aruco.py                  marker detection, plate frame, homography, occlusion cache
   identify_plate.py         work out the plate's dictionary & geometry [calibration]
   calibrate_camera.py       chessboard intrinsics (optional)        [calibration]
   calibrate_plate.py        plate -> robot transform                [calibration]
-  transforms.py             the coordinate chain
+  transforms.py             the coordinate chain + overhead parallax correction
+  overlay.py                readable HUD text over a camera frame
   live_view.py              live overlay: X11 window or browser stream
   make_board.py             generate a printable 3x3 board
   demo_click_to_move.py     click the plate, arm goes there
   demo_pick_place.py        pick and place in plate coordinates
   plot_workspace.py         matplotlib workspace envelope
-tests/                      26 tests, hardware-free
+tests/                      34 tests, hardware-free
 calib/                      calibration output (committed — see calib/README.md)
 data/                       snapshots and plots (gitignored)
 ```
@@ -240,6 +289,10 @@ dobotpbl --stream        # then open http://localhost:5000
 ```bash
 QT_SCALE_FACTOR=2 dobotpbl --rebuild
 ```
+
+**Picking works in the middle of the plate but misses near the edges.** That is
+overhead parallax, not a calibration error. See *The camera is fixed, not on the
+arm* above and pass `--camera-height`.
 
 **No markers detected.** Glare on glossy plastic is the usual cause — tilt the
 plate or move the light off the specular angle. Check `data/plate_snapshot.png`

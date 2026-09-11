@@ -22,20 +22,22 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.aruco import PlateBoard
+from src.aruco import PlateBoard, PlateTracker
 from src.camera import Camera
+from src.overlay import hud
 from src.transforms import PlateToRobot
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 
 
-def annotate(frame: np.ndarray, board: PlateBoard,
+def annotate(frame: np.ndarray, tracker: PlateTracker,
              tf: PlateToRobot | None, fps: float) -> np.ndarray:
     """Draw markers, the plate axes and a live readout. Returns a new image."""
+    board = tracker.board
     vis = frame.copy()
     try:
-        H, found = board.homography(frame)
-        board.draw(vis, found)
+        H, found = tracker.update(frame)
+        board.draw(vis, found, stale=not tracker.fresh)
 
         # Plate axes, 40 mm long, projected back into the image.
         Hi = np.linalg.inv(H)
@@ -49,32 +51,27 @@ def annotate(frame: np.ndarray, board: PlateBoard,
         cv2.putText(vis, "Y", tuple(ay + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                     (0, 255, 0), 2)
 
-        lines = [f"{len(found)}/9 markers", "plate frame locked"]
+        lines = [tracker.status]
         if tf is not None:
             c = board.apply(H, np.array([[vis.shape[1] / 2, vis.shape[0] / 2]]))[0]
             r = tf(c)
             lines.append(f"centre: plate ({c[0]:6.1f}, {c[1]:6.1f}) mm")
             lines.append(f"        robot ({r[0]:6.1f}, {r[1]:6.1f}) mm")
-        colour = (0, 255, 0)
+        colour = (0, 255, 0) if tracker.fresh else (0, 190, 255)
     except RuntimeError as exc:
         lines, colour = [str(exc)[:64]], (0, 0, 255)
 
     lines.append(f"{fps:4.1f} fps")
-    for i, text in enumerate(lines):
-        y = 30 + i * 26
-        cv2.putText(vis, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
-                    (0, 0, 0), 4, cv2.LINE_AA)
-        cv2.putText(vis, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
-                    colour if i == 0 else (255, 255, 255), 1, cv2.LINE_AA)
-    return vis
+    return hud(vis, lines, colours=[colour])
 
 
-def run_window(cam: Camera, board: PlateBoard, tf: PlateToRobot | None) -> None:
+def run_window(cam: Camera, tracker: PlateTracker,
+               tf: PlateToRobot | None) -> None:
     cv2.namedWindow("dobot live", cv2.WINDOW_NORMAL)
     times: deque[float] = deque(maxlen=30)
     while True:
         t0 = time.time()
-        vis = annotate(cam.read(flush=1), board, tf,
+        vis = annotate(cam.read(flush=1), tracker, tf,
                        len(times) / sum(times) if times else 0.0)
         cv2.imshow("dobot live", vis)
         key = cv2.waitKey(1) & 0xFF
@@ -91,7 +88,7 @@ def run_window(cam: Camera, board: PlateBoard, tf: PlateToRobot | None) -> None:
     cv2.destroyAllWindows()
 
 
-def run_stream(cam: Camera, board: PlateBoard, tf: PlateToRobot | None,
+def run_stream(cam: Camera, tracker: PlateTracker, tf: PlateToRobot | None,
                port: int = 5000) -> None:
     from flask import Flask, Response
 
@@ -101,7 +98,7 @@ def run_stream(cam: Camera, board: PlateBoard, tf: PlateToRobot | None,
         times: deque[float] = deque(maxlen=30)
         while True:
             t0 = time.time()
-            vis = annotate(cam.read(flush=1), board, tf,
+            vis = annotate(cam.read(flush=1), tracker, tf,
                            len(times) / sum(times) if times else 0.0)
             ok, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ok:
@@ -132,7 +129,7 @@ def main() -> None:
     ap.add_argument("--camera", type=int, default=None)
     args = ap.parse_args()
 
-    board = PlateBoard.load()
+    tracker = PlateTracker(PlateBoard.load())
     try:
         tf = PlateToRobot.load()
         print(f"plate transform loaded (rms {tf.rms_mm:.2f} mm)")
@@ -143,9 +140,9 @@ def main() -> None:
     with Camera(args.camera) as cam:
         print(f"camera {cam.index} at {cam.size}")
         if args.stream:
-            run_stream(cam, board, tf, args.port)
+            run_stream(cam, tracker, tf, args.port)
         else:
-            run_window(cam, board, tf)
+            run_window(cam, tracker, tf)
 
 
 if __name__ == "__main__":
